@@ -185,6 +185,9 @@ def register():
 def login():
     try:
         data = request.json
+        if not data:
+            logger.error("No JSON data received in request")
+            return jsonify({'success': False, 'message': 'No data provided'}), 400
         logger.debug(f"Received login data: {data}")
 
         required_fields = ['role', 'email', 'password']
@@ -204,16 +207,25 @@ def login():
         logger.debug(f"Querying Firestore for user with email: {email}")
         users_ref = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
         user = None
+        user_doc = None
         for doc in users_ref:
-            logger.debug(f"Found user document: {doc.id}, data: {doc.to_dict()}")
-            user = User.from_dict(doc.id, doc.to_dict())
+            user_doc = doc.to_dict()
+            logger.debug(f"Found user document: {doc.id}, data: {user_doc}")
+            user = User.from_dict(doc.id, user_doc)
             break
 
         if user:
             logger.debug(f"User found: {user.email}, role: {user.role}")
-            if not check_password_hash(user.password_hash, password):
-                logger.warning(f"Password mismatch for user: {email}")
-                return jsonify({'success': False, 'message': 'Invalid password'}), 401
+            if not hasattr(user, 'password_hash') or not user.password_hash:
+                logger.error(f"User {email} has no password_hash field")
+                return jsonify({'success': False, 'message': 'User data corrupted: missing password'}), 500
+            try:
+                if not check_password_hash(user.password_hash, password):
+                    logger.warning(f"Password mismatch for user: {email}")
+                    return jsonify({'success': False, 'message': 'Invalid password'}), 401
+            except ValueError as ve:
+                logger.error(f"Password hash check failed for {email}: {str(ve)}")
+                return jsonify({'success': False, 'message': 'Invalid password hash format'}), 500
             if user.role != role:
                 logger.warning(f"Role mismatch: expected {role}, got {user.role}")
                 return jsonify({'success': False, 'message': 'Role does not match'}), 400
@@ -231,7 +243,6 @@ def login():
     except Exception as e:
         logger.error(f"Error in login endpoint: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
-
 @app.route('/inventory', methods=['GET'])
 def get_inventory():
     try:
