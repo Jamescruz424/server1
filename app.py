@@ -13,12 +13,11 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Configure CORS to allow requests from the frontend's deployed URL
-# Replace with your actual frontend URL after deployment
+# Configure CORS
 cors_allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")
 CORS(app, resources={r"/*": {"origins": cors_allowed_origins}})
 
-# Initialize Firebase with credentials from environment variable
+# Initialize Firebase
 try:
     firebase_creds = os.getenv("FIREBASE_CREDENTIALS")
     if not firebase_creds:
@@ -67,16 +66,94 @@ class User:
         )
 
 def check_existing_user(email, id):
-    logger.debug(f"Checking existing user with email: {email}, id: {id}")
+    logger.debug(f"Checking if user exists with email: {email}, id: {id}")
+    
+    # Check email
     email_query = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
-    for doc in email_query:
-        return doc.id
-    id_query = db.collection('users').where(filter=firestore.FieldFilter('id', '==', id)).limit(1).stream()
-    for doc in id_query:
-        return doc.id
-    return None
+    email_docs = list(email_query)
+    if email_docs:
+        logger.debug(f"Email '{email}' already exists with doc ID: {email_docs[0].id}")
+        return "email", email_docs[0].id
 
-# Inventory class
+    # Check ID
+    id_query = db.collection('users').where(filter=firestore.FieldFilter('id', '==', id)).limit(1).stream()
+    id_docs = list(id_query)
+    if id_docs:
+        logger.debug(f"ID '{id}' already exists with doc ID: {id_docs[0].id}")
+        return "id", id_docs[0].id
+
+    logger.debug("No existing user found")
+    return None, None
+
+# Input validation helper
+def validate_input(data, required_fields):
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return False, f"Missing or empty field: {field}"
+    return True, None
+
+# Routes
+@app.route('/register', methods=['POST'])
+def register():
+    try:
+        data = request.json
+        logger.debug(f"Received registration data: {data}")
+
+        required_fields = ['name', 'email', 'id', 'dept', 'password']
+        is_valid, error_message = validate_input(data, required_fields)
+        if not is_valid:
+            logger.error(error_message)
+            return jsonify({'success': False, 'message': error_message}), 400
+
+        name = data.get('name')
+        email = data.get('email')
+        id = data.get('id')
+        dept = data.get('dept')
+        password = data.get('password')
+        role = data.get('role', 'user')
+
+        # Check if user exists
+        conflict_field, existing_user_id = check_existing_user(email, id)
+        if conflict_field:
+            message = f"{conflict_field.capitalize()} already exists"
+            logger.error(message)
+            return jsonify({'success': False, 'message': message}), 400
+
+        if role not in ['user', 'admin']:
+            logger.error("Invalid role selected")
+            return jsonify({'success': False, 'message': 'Invalid role'}), 400
+
+        password_hash = generate_password_hash(password)
+
+        user_data = {
+            'name': name,
+            'email': email,
+            'id': id,
+            'dept': dept,
+            'password_hash': password_hash,
+            'role': role
+        }
+        logger.debug(f"Saving user data to Firestore: {user_data}")
+
+        db.collection('users').document(id).set(user_data)
+        logger.info(f"User {id} successfully saved to Firestore")
+
+        return jsonify({'success': True, 'message': 'User registered successfully'}), 200
+
+    except Exception as e:
+        logger.error(f"Error during registration: {str(e)}")
+        return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
+
+# Other routes (unchanged for brevity but should be included as in previous code)
+@app.route('/inventory', methods=['GET'])
+def get_inventory():
+    inventory_ref = db.collection('inventory').stream()
+    items = [InventoryItem.from_dict(doc.id, doc.to_dict()) for doc in inventory_ref]
+    return jsonify({
+        'success': True,
+        'items': [{'id': item.id, 'name': item.name, 'category': item.category, 'sku': item.sku, 'quantity': item.quantity, 'unit_price': item.unit_price, 'image_url': item.image_url} for item in items]
+    }), 200
+
 class InventoryItem:
     def __init__(self, id, name, category, sku, quantity, unit_price, image_url=None):
         self.id = id
@@ -116,72 +193,6 @@ def check_existing_sku(sku, exclude_id=None):
         if exclude_id is None or doc.id != exclude_id:
             return doc.id
     return None
-
-# Input validation helper
-def validate_input(data, required_fields):
-    for field in required_fields:
-        if field not in data or not data[field]:
-            return False, f"Missing or empty field: {field}"
-    return True, None
-
-# Routes
-@app.route('/register', methods=['POST'])
-def register():
-    try:
-        data = request.json
-        logger.debug(f"Received registration data: {data}")
-
-        required_fields = ['name', 'email', 'id', 'dept', 'password']
-        is_valid, error_message = validate_input(data, required_fields)
-        if not is_valid:
-            logger.error(error_message)
-            return jsonify({'success': False, 'message': error_message}), 400
-
-        name = data.get('name')
-        email = data.get('email')
-        id = data.get('id')
-        dept = data.get('dept')
-        password = data.get('password')
-        role = data.get('role', 'user')
-
-        existing_user_id = check_existing_user(email, id)
-        if existing_user_id:
-            logger.error("Email or ID already exists")
-            return jsonify({'success': False, 'message': 'Email or ID already exists'}), 400
-
-        if role not in ['user', 'admin']:
-            logger.error("Invalid role selected")
-            return jsonify({'success': False, 'message': 'Invalid role'}), 400
-
-        password_hash = generate_password_hash(password)
-
-        user_data = {
-            'name': name,
-            'email': email,
-            'id': id,
-            'dept': dept,
-            'password_hash': password_hash,
-            'role': role
-        }
-        logger.debug(f"Saving user data to Firestore: {user_data}")
-
-        db.collection('users').document(id).set(user_data)
-        logger.info(f"User {id} successfully saved to Firestore")
-
-        return jsonify({'success': True, 'message': 'User registered successfully'}), 200
-
-    except Exception as e:
-        logger.error(f"Error during registration: {str(e)}")
-        return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
-
-@app.route('/inventory', methods=['GET'])
-def get_inventory():
-    inventory_ref = db.collection('inventory').stream()
-    items = [InventoryItem.from_dict(doc.id, doc.to_dict()) for doc in inventory_ref]
-    return jsonify({
-        'success': True,
-        'items': [{'id': item.id, 'name': item.name, 'category': item.category, 'sku': item.sku, 'quantity': item.quantity, 'unit_price': item.unit_price, 'image_url': item.image_url} for item in items]
-    }), 200
 
 @app.route('/inventory', methods=['POST'])
 def add_inventory():
@@ -352,7 +363,7 @@ def create_request():
             'status': status,
         }
 
-        request_ref = db.collection('requests').document()
+        request_ref = db.collection('users').document()
         request_ref.set(request_data)
         logger.debug(f"Request saved to Firestore with ID: {request_ref.id}")
 
@@ -460,7 +471,5 @@ def get_dashboard_data():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 if __name__ == '__main__':
-    # Use environment variable for port (required for Render)
     port = int(os.getenv("PORT", 5000))
-    # Bind to 0.0.0.0 for Render
     app.run(host="0.0.0.0", port=port, debug=False)
