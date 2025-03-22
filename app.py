@@ -67,15 +67,12 @@ class User:
 
 def check_existing_user(email, id):
     logger.debug(f"Checking if user exists with email: {email}, id: {id}")
-    
-    # Check email
     email_query = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
     email_docs = list(email_query)
     if email_docs:
         logger.debug(f"Email '{email}' already exists with doc ID: {email_docs[0].id}")
         return "email", email_docs[0].id
 
-    # Check ID
     id_query = db.collection('users').where(filter=firestore.FieldFilter('id', '==', id)).limit(1).stream()
     id_docs = list(id_query)
     if id_docs:
@@ -85,75 +82,7 @@ def check_existing_user(email, id):
     logger.debug("No existing user found")
     return None, None
 
-# Input validation helper
-def validate_input(data, required_fields):
-    for field in required_fields:
-        if field not in data or not data[field]:
-            return False, f"Missing or empty field: {field}"
-    return True, None
-
-# Routes
-@app.route('/register', methods=['POST'])
-def register():
-    try:
-        data = request.json
-        logger.debug(f"Received registration data: {data}")
-
-        required_fields = ['name', 'email', 'id', 'dept', 'password']
-        is_valid, error_message = validate_input(data, required_fields)
-        if not is_valid:
-            logger.error(error_message)
-            return jsonify({'success': False, 'message': error_message}), 400
-
-        name = data.get('name')
-        email = data.get('email')
-        id = data.get('id')
-        dept = data.get('dept')
-        password = data.get('password')
-        role = data.get('role', 'user')
-
-        # Check if user exists
-        conflict_field, existing_user_id = check_existing_user(email, id)
-        if conflict_field:
-            message = f"{conflict_field.capitalize()} already exists"
-            logger.error(message)
-            return jsonify({'success': False, 'message': message}), 400
-
-        if role not in ['user', 'admin']:
-            logger.error("Invalid role selected")
-            return jsonify({'success': False, 'message': 'Invalid role'}), 400
-
-        password_hash = generate_password_hash(password)
-
-        user_data = {
-            'name': name,
-            'email': email,
-            'id': id,
-            'dept': dept,
-            'password_hash': password_hash,
-            'role': role
-        }
-        logger.debug(f"Saving user data to Firestore: {user_data}")
-
-        db.collection('users').document(id).set(user_data)
-        logger.info(f"User {id} successfully saved to Firestore")
-
-        return jsonify({'success': True, 'message': 'User registered successfully'}), 200
-
-    except Exception as e:
-        logger.error(f"Error during registration: {str(e)}")
-        return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
-
-# Other routes (unchanged for brevity but should be included as in previous code)
-@app.route('/inventory', methods=['GET'])
-def get_inventory():
-    inventory_ref = db.collection('inventory').stream()
-    items = [InventoryItem.from_dict(doc.id, doc.to_dict()) for doc in inventory_ref]
-    return jsonify({
-        'success': True,
-        'items': [{'id': item.id, 'name': item.name, 'category': item.category, 'sku': item.sku, 'quantity': item.quantity, 'unit_price': item.unit_price, 'image_url': item.image_url} for item in items]
-    }), 200
-
+# Inventory class
 class InventoryItem:
     def __init__(self, id, name, category, sku, quantity, unit_price, image_url=None):
         self.id = id
@@ -193,6 +122,128 @@ def check_existing_sku(sku, exclude_id=None):
         if exclude_id is None or doc.id != exclude_id:
             return doc.id
     return None
+
+# Input validation helper
+def validate_input(data, required_fields):
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return False, f"Missing or empty field: {field}"
+    return True, None
+
+# Routes
+@app.route('/register', methods=['POST'])
+def register():
+    try:
+        data = request.json
+        logger.debug(f"Received registration data: {data}")
+
+        required_fields = ['name', 'email', 'id', 'dept', 'password']
+        is_valid, error_message = validate_input(data, required_fields)
+        if not is_valid:
+            logger.error(error_message)
+            return jsonify({'success': False, 'message': error_message}), 400
+
+        name = data.get('name')
+        email = data.get('email')
+        id = data.get('id')
+        dept = data.get('dept')
+        password = data.get('password')
+        role = data.get('role', 'user')
+
+        conflict_field, existing_user_id = check_existing_user(email, id)
+        if conflict_field:
+            message = f"{conflict_field.capitalize()} already exists"
+            logger.error(message)
+            return jsonify({'success': False, 'message': message}), 400
+
+        if role not in ['user', 'admin']:
+            logger.error("Invalid role selected")
+            return jsonify({'success': False, 'message': 'Invalid role'}), 400
+
+        password_hash = generate_password_hash(password)
+
+        user_data = {
+            'name': name,
+            'email': email,
+            'id': id,
+            'dept': dept,
+            'password_hash': password_hash,
+            'role': role
+        }
+        logger.debug(f"Saving user data to Firestore: {user_data}")
+
+        db.collection('users').document(id).set(user_data)
+        logger.info(f"User {id} successfully saved to Firestore")
+
+        return jsonify({'success': True, 'message': 'User registered successfully'}), 200
+
+    except Exception as e:
+        logger.error(f"Error during registration: {str(e)}")
+        return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
+
+@app.route('/login', methods=['POST'])
+def login():
+    try:
+        data = request.json
+        logger.debug(f"Received login data: {data}")
+
+        required_fields = ['role', 'email', 'password']
+        is_valid, error_message = validate_input(data, required_fields)
+        if not is_valid:
+            logger.error(f"Validation failed: {error_message}")
+            return jsonify({'success': False, 'message': error_message}), 400
+
+        role = data.get('role')
+        email = data.get('email')
+        password = data.get('password')
+
+        if role not in ['user', 'admin']:
+            logger.error(f"Invalid role: {role}")
+            return jsonify({'success': False, 'message': 'Invalid role selected'}), 400
+
+        logger.debug(f"Querying Firestore for user with email: {email}")
+        users_ref = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
+        user = None
+        for doc in users_ref:
+            logger.debug(f"Found user document: {doc.id}, data: {doc.to_dict()}")
+            user = User.from_dict(doc.id, doc.to_dict())
+            break
+
+        if user:
+            logger.debug(f"User found: {user.email}, role: {user.role}")
+            if not check_password_hash(user.password_hash, password):
+                logger.warning(f"Password mismatch for user: {email}")
+                return jsonify({'success': False, 'message': 'Invalid password'}), 401
+            if user.role != role:
+                logger.warning(f"Role mismatch: expected {role}, got {user.role}")
+                return jsonify({'success': False, 'message': 'Role does not match'}), 400
+            logger.info(f"Login successful for user: {email}")
+            return jsonify({
+                'success': True,
+                'message': 'Login successful',
+                'role': user.role,
+                'user': {'name': user.name, 'email': user.email, 'id': user.id, 'dept': user.dept}
+            }), 200
+        else:
+            logger.warning(f"No user found with email: {email}")
+            return jsonify({'success': False, 'message': 'User not found'}), 401
+
+    except Exception as e:
+        logger.error(f"Error in login endpoint: {str(e)}", exc_info=True)
+        return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
+
+@app.route('/inventory', methods=['GET'])
+def get_inventory():
+    try:
+        inventory_ref = db.collection('inventory').stream()
+        items = [InventoryItem.from_dict(doc.id, doc.to_dict()) for doc in inventory_ref]
+        return jsonify({
+            'success': True,
+            'items': [{'id': item.id, 'name': item.name, 'category': item.category, 'sku': item.sku, 'quantity': item.quantity, 'unit_price': item.unit_price, 'image_url': item.image_url} for item in items]
+        }), 200
+    except Exception as e:
+        logger.error(f"Error fetching inventory: {str(e)}")
+        return jsonify({'success': False, 'message': str(e)}), 500
 
 @app.route('/inventory', methods=['POST'])
 def add_inventory():
@@ -294,39 +345,6 @@ def delete_inventory(item_id):
         logger.exception("Error in delete_inventory: %s", str(e))
         return jsonify({'success': False, 'message': str(e)}), 500
 
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    required_fields = ['role', 'email', 'password']
-    is_valid, error_message = validate_input(data, required_fields)
-    if not is_valid:
-        return jsonify({'success': False, 'message': error_message}), 400
-
-    role = data.get('role')
-    email = data.get('email')
-    password = data.get('password')
-
-    if role not in ['user', 'admin']:
-        return jsonify({'success': False, 'message': 'Invalid role selected'}), 400
-
-    users_ref = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
-    user = None
-    for doc in users_ref:
-        user = User.from_dict(doc.id, doc.to_dict())
-        break
-
-    if user and check_password_hash(user.password_hash, password):
-        if user.role != role:
-            return jsonify({'success': False, 'message': 'Role does not match'}), 400
-        return jsonify({
-            'success': True,
-            'message': 'Login successful',
-            'role': user.role,
-            'user': {'name': user.name, 'email': user.email, 'id': user.id, 'dept': user.dept}
-        }), 200
-    else:
-        return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-
 @app.route('/requests', methods=['POST'])
 def create_request():
     try:
@@ -363,7 +381,7 @@ def create_request():
             'status': status,
         }
 
-        request_ref = db.collection('users').document()
+        request_ref = db.collection('requests').document()  # Fixed typo: 'users' -> 'requests'
         request_ref.set(request_data)
         logger.debug(f"Request saved to Firestore with ID: {request_ref.id}")
 
