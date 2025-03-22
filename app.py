@@ -65,22 +65,6 @@ class User:
             role=data.get('role', 'user')
         )
 
-def check_existing_user(email, id):
-    logger.debug(f"Checking if user exists with email: {email}, id: {id}")
-    email_query = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
-    email_docs = list(email_query)
-    if email_docs:
-        logger.debug(f"Email '{email}' already exists with doc ID: {email_docs[0].id}")
-        return "email", email_docs[0].id
-
-    id_query = db.collection('users').where(filter=firestore.FieldFilter('id', '==', id)).limit(1).stream()
-    id_docs = list(id_query)
-    if id_docs:
-        logger.debug(f"ID '{id}' already exists with doc ID: {id_docs[0].id}")
-        return "id", id_docs[0].id
-
-    logger.debug("No existing user found")
-    return None, None
 
 # Inventory class
 class InventoryItem:
@@ -181,6 +165,25 @@ def register():
         logger.error(f"Error during registration: {str(e)}")
         return jsonify({'success': False, 'message': f'Registration failed: {str(e)}'}), 500
 
+
+def check_existing_user(email, id):
+    logger.debug(f"Checking if user exists with email: {email}, id: {id}")
+    email_query = db.collection('users').where(filter=firestore.FieldFilter('email', '==', email)).limit(1).stream()
+    email_docs = list(email_query)
+    if email_docs:
+        logger.debug(f"Email '{email}' already exists with doc ID: {email_docs[0].id}")
+        return "email", email_docs[0].id
+
+    id_query = db.collection('users').where(filter=firestore.FieldFilter('id', '==', id)).limit(1).stream()
+    id_docs = list(id_query)
+    if id_docs:
+        logger.debug(f"ID '{id}' already exists with doc ID: {id_docs[0].id}")
+        return "id", id_docs[0].id
+
+    logger.debug("No existing user found")
+    return None, None
+
+# Routes
 @app.route('/login', methods=['POST'])
 def login():
     try:
@@ -192,7 +195,7 @@ def login():
         if not is_valid:
             return jsonify({'success': False, 'message': error_message}), 400
 
-        role = data.get('role')
+        role = data.get('role').lower()
         email = data.get('email')
         password = data.get('password')
 
@@ -210,8 +213,10 @@ def login():
             if not hasattr(user, 'password_hash') or not user.password_hash:
                 return jsonify({'success': False, 'message': 'User data corrupted: missing password'}), 500
             if not check_password_hash(user.password_hash, password):
+                logger.error(f"Password mismatch for email: {email}")
                 return jsonify({'success': False, 'message': 'Invalid password'}), 401
-            if user.role != role:
+            if user.role.lower() != role:
+                logger.error(f"Role mismatch. Sent role: {role}, Stored role: {user.role}")
                 return jsonify({'success': False, 'message': 'Role does not match'}), 400
             return jsonify({
                 'success': True,
@@ -224,7 +229,16 @@ def login():
     except Exception as e:
         logger.error(f"Error in login endpoint: {str(e)}", exc_info=True)
         return jsonify({'success': False, 'message': f'Server error: {str(e)}'}), 500
-        @app.route('/inventory', methods=['GET'])
+
+def validate_input(data, required_fields):
+    for field in required_fields:
+        if field not in data or not data[field]:
+            return False, f"Missing or empty field: {field}"
+    return True, None
+
+
+
+
 def get_inventory():
     try:
         inventory_ref = db.collection('inventory').stream()
