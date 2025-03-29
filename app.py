@@ -33,6 +33,7 @@ db = firestore.client()'''
 import firebase_admin
 
 from firebase_admin import credentials, firestore
+
 import logging
 
 # Configure logging
